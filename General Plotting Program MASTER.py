@@ -257,6 +257,10 @@ class GeneralPlotter(tk.Tk):
         self.decimate_preview = tk.BooleanVar(
             value=self.settings.get("decimate_preview", True)
         )
+        # NEW: custom axis label text
+        self.x_label = tk.StringVar(value=self.settings.get("x_label", ""))
+        self.y_left_label = tk.StringVar(value=self.settings.get("y_left_label", ""))
+        self.y_right_label = tk.StringVar(value=self.settings.get("y_right_label", ""))
         self.yerr_col = tk.StringVar(value=self.settings.get("yerr_col", "None"))
         self.y_left_format = tk.StringVar(
             value=self.settings.get("y_left_format", "plain")
@@ -266,6 +270,7 @@ class GeneralPlotter(tk.Tk):
         )
         self.theme = tk.StringVar(value=self.settings.get("theme", "classic"))
         self.top_k_facets = tk.IntVar(value=int(self.settings.get("top_k_facets", 0)))
+        self.show_grid = tk.BooleanVar(value=True)  # NEW: toggle for grid on/off
 
         # UI
         self._build_ui()
@@ -337,6 +342,10 @@ class GeneralPlotter(tk.Tk):
                 "references": self.references,
                 "filter_query": self.filter_query.get(),
                 "decimate_preview": self.decimate_preview.get(),
+                "x_label": self.x_label.get(),  # NEW
+                "y_left_label": self.y_left_label.get(),  # NEW
+                "y_right_label": self.y_right_label.get(),  # NEW
+                "show_grid": self.show_grid.get(),
                 "yerr_col": self.yerr_col.get(),
                 "y_left_format": self.y_left_format.get(),
                 "y_right_format": self.y_right_format.get(),
@@ -472,12 +481,17 @@ class GeneralPlotter(tk.Tk):
 
         # ----- LEFT PANE (resizable) -----
         left_pane = ttk.Frame(paned)
-        paned.add(left_pane)
-        # Keep left pane from collapsing too small
+        paned.add(left_pane)  # ADD ONCE
+
+        # Configure pane options using the correct API (no re-adding)
         try:
-            paned.paneconfigure(left_pane, weight=0, minsize=LEFT_COL_MIN)
+            paned.pane(left_pane, weight=1)
         except Exception:
-            pass  # older Tk may not support 'weight' here; still works
+            pass
+        try:
+            paned.pane(left_pane, minsize=LEFT_COL_MIN)
+        except Exception:
+            pass
 
         # Canvas + vertical scrollbar inside left pane
         self.left_canvas = tk.Canvas(left_pane, highlightthickness=0, borderwidth=0)
@@ -510,6 +524,9 @@ class GeneralPlotter(tk.Tk):
             self.left_canvas.itemconfigure(self.left_canvas_window, width=w)
 
         left_pane.bind("<Configure>", _sync_inner_width)
+        self.left_canvas.bind(
+            "<Configure>", _sync_inner_width
+        )  # NEW: catch canvas resizes too
         self.after(50, _sync_inner_width)  # do an initial sync
 
         # Set initial sash position after the panedwindow is realized
@@ -556,11 +573,11 @@ class GeneralPlotter(tk.Tk):
 
         # ----- RIGHT PANE (preview) -----
         right = ttk.Frame(paned)
-        paned.add(right)
+        paned.add(right)  # add once
         try:
-            paned.paneconfigure(right, weight=1)
+            paned.pane(right, weight=1)  # correct API
         except Exception:
-            pass
+            pass  # don't re-add
 
         right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
@@ -704,41 +721,79 @@ class GeneralPlotter(tk.Tk):
         )
         lf_titles.grid_columnconfigure(1, weight=1)
 
+        # --- Style & Layout (boxed subsections) ---
         lf_style = ttk.Labelframe(left, text="Style & Layout")
         lf_style.pack(fill="x", padx=6, pady=4)
-        ttk.Label(lf_style, text="Kind").grid(
-            row=0, column=0, sticky="w", padx=6, pady=4
+
+        # Optional: a little padding and bold labels for inner boxes
+        try:
+            style = ttk.Style(self)
+            style.configure("Inner.TLabelframe", padding=(8, 6, 8, 6))
+            style.configure(
+                "Inner.TLabelframe.Label", font=("TkDefaultFont", 9, "bold")
+            )
+        except Exception:
+            pass
+
+        # Make two columns for the top row of boxes
+        lf_style.grid_columnconfigure(0, weight=1)
+        lf_style.grid_columnconfigure(1, weight=1)
+
+        # ---------- Box 1 (left): Plot appearance ----------
+        lf_appear = ttk.Labelframe(
+            lf_style, text="Plot appearance", style="Inner.TLabelframe"
+        )
+        lf_appear.grid(row=0, column=0, sticky="nsew", padx=(6, 3), pady=(6, 6))
+        lf_appear.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(lf_appear, text="Kind").grid(
+            row=0, column=0, sticky="e", padx=(0, 6), pady=2
         )
         ttk.Combobox(
-            lf_style,
+            lf_appear,
             values=["line", "scatter", "bar", "area", "step"],
             textvariable=self.plot_kind,
             state="readonly",
-            width=10,
-        ).grid(row=0, column=1, sticky="w", padx=6, pady=4)
-        ttk.Label(lf_style, text="Linewidth").grid(
-            row=0, column=2, sticky="e", padx=6, pady=4
+            width=12,
+        ).grid(row=0, column=1, sticky="w", pady=2)
+
+        ttk.Label(lf_appear, text="Linewidth").grid(
+            row=1, column=0, sticky="e", padx=(0, 6), pady=2
         )
-        ttk.Entry(lf_style, textvariable=self.linewidth, width=8).grid(
-            row=0, column=3, sticky="w", padx=6, pady=4
+        ttk.Entry(lf_appear, textvariable=self.linewidth, width=10).grid(
+            row=1, column=1, sticky="w", pady=2
         )
-        ttk.Label(lf_style, text="Markersize").grid(
-            row=0, column=4, sticky="e", padx=6, pady=4
+
+        ttk.Label(lf_appear, text="Markersize").grid(
+            row=2, column=0, sticky="e", padx=(0, 6), pady=2
         )
-        ttk.Entry(lf_style, textvariable=self.markersize, width=8).grid(
-            row=0, column=5, sticky="w", padx=6, pady=4
+        ttk.Entry(lf_appear, textvariable=self.markersize, width=10).grid(
+            row=2, column=1, sticky="w", pady=2
         )
-        ttk.Label(lf_style, text="Grid columns (grids/facets)").grid(
-            row=1, column=0, sticky="w", padx=6, pady=4
-        )
-        ttk.Spinbox(lf_style, from_=1, to=6, textvariable=self.ncols, width=6).grid(
-            row=1, column=1, sticky="w", padx=6, pady=4
-        )
-        ttk.Label(lf_style, text="Legend location").grid(
-            row=1, column=2, sticky="e", padx=6, pady=4
+
+        ttk.Label(lf_appear, text="Theme").grid(
+            row=3, column=0, sticky="e", padx=(0, 6), pady=2
         )
         ttk.Combobox(
-            lf_style,
+            lf_appear,
+            values=["classic", "minimal", "dark", "journal"],
+            textvariable=self.theme,
+            state="readonly",
+            width=14,
+        ).grid(row=3, column=1, sticky="w", pady=2)
+
+        # ---------- Box 2 (right): Legend & grid ----------
+        lf_layout = ttk.Labelframe(
+            lf_style, text="Legend & grid", style="Inner.TLabelframe"
+        )
+        lf_layout.grid(row=0, column=1, sticky="nsew", padx=(3, 6), pady=(6, 6))
+        lf_layout.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(lf_layout, text="Legend location").grid(
+            row=0, column=0, sticky="e", padx=(0, 6), pady=2
+        )
+        ttk.Combobox(
+            lf_layout,
             values=[
                 "best",
                 "upper right",
@@ -754,41 +809,88 @@ class GeneralPlotter(tk.Tk):
             ],
             textvariable=self.legend_loc,
             state="readonly",
-            width=14,
-        ).grid(row=1, column=3, columnspan=3, sticky="w", padx=6, pady=4)
+            width=16,
+        ).grid(row=0, column=1, sticky="w", pady=2)
+
+        ttk.Label(lf_layout, text="Grid columns").grid(
+            row=1, column=0, sticky="e", padx=(0, 6), pady=2
+        )
+        ttk.Spinbox(lf_layout, from_=1, to=6, textvariable=self.ncols, width=8).grid(
+            row=1, column=1, sticky="w", pady=2
+        )
+
         ttk.Checkbutton(
-            lf_style, text="Decimate preview for speed", variable=self.decimate_preview
-        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        ttk.Label(lf_style, text="Theme").grid(
-            row=2, column=2, sticky="e", padx=6, pady=4
+            lf_layout, text="Decimate preview for speed", variable=self.decimate_preview
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        # NEW: grid toggle
+        ttk.Checkbutton(
+            lf_layout,
+            text="Show grid lines",
+            variable=self.show_grid,
+            command=self._schedule_preview,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        # ---------- Box 3 (full width): Axis label formatting ----------
+        lf_fmt = ttk.Labelframe(
+            lf_style, text="Axis label formatting", style="Inner.TLabelframe"
+        )
+        lf_fmt.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6))
+        lf_fmt.grid_columnconfigure(1, weight=1)
+        lf_fmt.grid_columnconfigure(3, weight=1)
+
+        # === NEW: Axis label text inputs ===
+        ttk.Label(lf_fmt, text="X axis label").grid(
+            row=0, column=0, sticky="e", padx=6, pady=4
+        )
+        ttk.Entry(lf_fmt, textvariable=self.x_label).grid(
+            row=0, column=1, sticky="ew", padx=6, pady=4
+        )
+
+        ttk.Label(lf_fmt, text="Left Y label").grid(
+            row=1, column=0, sticky="e", padx=6, pady=4
+        )
+        ttk.Entry(lf_fmt, textvariable=self.y_left_label).grid(
+            row=1, column=1, sticky="ew", padx=6, pady=4
+        )
+
+        # Right-Y label (only shown for *_right plot types)
+        self.frm_y_right_label = ttk.Frame(lf_fmt)
+        self.frm_y_right_label.grid(
+            row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=(0, 2)
+        )
+        ttk.Label(self.frm_y_right_label, text="Right Y label").grid(
+            row=0, column=0, sticky="e", padx=6, pady=4
+        )
+        self.e_y_right_label = ttk.Entry(
+            self.frm_y_right_label, textvariable=self.y_right_label
+        )
+        self.e_y_right_label.grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+
+        # Let the entry column stretch
+        lf_fmt.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(lf_fmt, text="Left Y format").grid(
+            row=3, column=0, sticky="e", padx=(0, 6), pady=2
         )
         ttk.Combobox(
-            lf_style,
-            values=["classic", "minimal", "dark", "journal"],
-            textvariable=self.theme,
-            state="readonly",
-            width=12,
-        ).grid(row=2, column=3, sticky="w", padx=6, pady=4)
-        ttk.Label(lf_style, text="Left Y format").grid(
-            row=3, column=0, sticky="e", padx=6, pady=4
-        )
-        ttk.Combobox(
-            lf_style,
+            lf_fmt,
             values=["plain", "sci", "percent", "thousands"],
             textvariable=self.y_left_format,
             state="readonly",
-            width=12,
-        ).grid(row=3, column=1, sticky="w", padx=6, pady=4)
-        ttk.Label(lf_style, text="Right Y format").grid(
-            row=3, column=2, sticky="e", padx=6, pady=4
+            width=14,
+        ).grid(row=3, column=1, sticky="w", pady=2)
+
+        ttk.Label(lf_fmt, text="Right Y format").grid(
+            row=3, column=2, sticky="e", padx=(18, 6), pady=2
         )
         ttk.Combobox(
-            lf_style,
+            lf_fmt,
             values=["plain", "sci", "percent", "thousands"],
             textvariable=self.y_right_format,
             state="readonly",
-            width=12,
-        ).grid(row=3, column=3, sticky="w", padx=6, pady=4)
+            width=14,
+        ).grid(row=3, column=3, sticky="w", pady=2)
 
         lf_ranges = ttk.Labelframe(left, text="Axis Ranges")
         lf_ranges.pack(fill="x", padx=6, pady=4)
@@ -991,6 +1093,15 @@ class GeneralPlotter(tk.Tk):
                 w.configure(state=state)
             except Exception:
                 pass
+        # Show/hide the Right Y label row inside Axis label formatting
+        try:
+            if right_needed:
+                self.frm_y_right_label.grid()  # ensure it's visible
+            else:
+                self.frm_y_right_label.grid_remove()
+        except Exception:
+            pass
+
         self._schedule_preview()
 
     def _wire_live_preview(self, root):
@@ -1511,6 +1622,9 @@ class GeneralPlotter(tk.Tk):
 
         if ptype in ("single", "single_right"):
             ax = self.preview_fig.add_subplot(111)
+            ax.grid(
+                self.show_grid.get(), which="both", axis="both"
+            )  # toggle grid on/off
             for col in ycols:
                 st = self.series_style.get(col, {})
                 if st.get("visible", True) is False:
@@ -1537,6 +1651,7 @@ class GeneralPlotter(tk.Tk):
                 r = self.right_axis_series.get()
                 if r and r != "None" and r in df.columns:
                     ax2 = ax.twinx()
+                    ax2.grid(False)
                     self._plot_series(ax2, x, pd.to_numeric(df[r], errors="coerce"), r)
                     self._apply_limits(ax2, which="right", set_x=False)
                     self._apply_ticks(ax2, set_x=False)
@@ -1544,7 +1659,10 @@ class GeneralPlotter(tk.Tk):
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        r, fontsize=LABEL_FONTSIZE, rotation=-90, labelpad=12
+                        self.y_right_label.get() or right_series,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
                     )
                 else:
                     ax.text(
@@ -1556,12 +1674,16 @@ class GeneralPlotter(tk.Tk):
                         fontsize=10,
                     )
 
-            ax.set_xlabel(xcol, fontsize=LABEL_FONTSIZE)
-            ax.set_ylabel(
+            # Labels (use custom if provided)
+            ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
+            left_label_default = (
                 ", ".join([c for c in ycols if c != self.right_axis_series.get()])
-                or "Y",
-                fontsize=LABEL_FONTSIZE,
+                or "Y"
             )
+            ax.set_ylabel(
+                self.y_left_label.get() or left_label_default, fontsize=LABEL_FONTSIZE
+            )
+
             self._apply_ticks(ax)
             self._apply_limits(ax, which="left")
             _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
@@ -1596,6 +1718,7 @@ class GeneralPlotter(tk.Tk):
 
             for i, col in enumerate(ycols):
                 ax = axs[i]
+                ax.grid(self.show_grid.get())
                 st = self.series_style.get(col, {})
                 if st.get("visible", True) is False:
                     ax.set_visible(True)
@@ -1620,6 +1743,7 @@ class GeneralPlotter(tk.Tk):
 
                 if right_series and right_series in df.columns:
                     ax2 = ax.twinx()
+                    ax2.grid(False)
                     self._plot_series(
                         ax2,
                         x,
@@ -1631,10 +1755,18 @@ class GeneralPlotter(tk.Tk):
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
+                    # Right axis label
+                    ax2.set_ylabel(
+                        self.y_right_label.get() or r,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
+                    )
 
                 ax.set_title(col, fontsize=SUBPLOT_TITLE_FONTSIZE)
-                ax.set_xlabel(xcol, fontsize=LABEL_FONTSIZE)
-                ax.set_ylabel(col, fontsize=LABEL_FONTSIZE)
+                ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
+                left_label = self.y_left_label.get().strip() or col
+                ax.set_ylabel(self.y_left_label.get() or col, fontsize=LABEL_FONTSIZE)
                 self._apply_ticks(ax)
                 self._apply_limits(ax, which="left")
                 _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
@@ -1702,6 +1834,7 @@ class GeneralPlotter(tk.Tk):
 
             for i, lvl in enumerate(levels):
                 ax = axs[i]
+                ax.grid(self.show_grid.get())
                 mask = cats == lvl
                 x_sub = pd.to_numeric(df.loc[mask, xcol], errors="coerce")
                 for col in ycols:
@@ -1714,6 +1847,7 @@ class GeneralPlotter(tk.Tk):
 
                 if right_series and right_series in df.columns:
                     ax2 = ax.twinx()
+                    ax2.grid(False)
                     y_r = pd.to_numeric(df.loc[mask, right_series], errors="coerce")
                     self._plot_series(ax2, x_sub, y_r, right_series)
                     self._apply_limits(ax2, which="right", set_x=False)
@@ -1721,10 +1855,20 @@ class GeneralPlotter(tk.Tk):
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
+                    ax2.set_ylabel(
+                        self.y_right_label.get() or right_series,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
+                    )
 
                 ax.set_title(f"{facet_col} = {lvl}", fontsize=SUBPLOT_TITLE_FONTSIZE)
-                ax.set_xlabel(xcol, fontsize=LABEL_FONTSIZE)
-                ax.set_ylabel(", ".join(ycols), fontsize=LABEL_FONTSIZE)
+                ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
+                left_label = self.y_left_label.get().strip() or ", ".join(ycols)
+                ax.set_ylabel(
+                    self.y_left_label.get() or (", ".join(ycols)),
+                    fontsize=LABEL_FONTSIZE,
+                )
                 self._apply_ticks(ax)
                 self._apply_limits(ax, which="left")
                 _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
@@ -1799,7 +1943,8 @@ class GeneralPlotter(tk.Tk):
         figs = []
 
         def apply_common(ax):
-            ax.set_xlabel(xcol, fontsize=LABEL_FONTSIZE)
+            # Labels (use custom if provided)
+            ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
             self._apply_ticks(ax)
             self._apply_limits(ax, which="left")
             if self.log_x.get():
@@ -1817,6 +1962,7 @@ class GeneralPlotter(tk.Tk):
         if ptype in ("single", "single_right"):
             fig, ax = plt.subplots(figsize=(11, 8.5))
             fig.subplots_adjust(left=0.075, right=0.92, bottom=0.14, top=0.91)
+            ax.grid(self.show_grid.get())
             right_choice = None
             for col in ycols:
                 st = self.series_style.get(col, {})
@@ -1845,16 +1991,22 @@ class GeneralPlotter(tk.Tk):
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        right_choice, fontsize=LABEL_FONTSIZE, rotation=-90, labelpad=15
+                        self.y_right_label.get() or right_choice,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=15,
                     )
+
                 else:
                     messagebox.showwarning(
                         "Right Y", "Select a valid series for the right Y-axis."
                     )
 
+            left_label_default = (
+                ", ".join([c for c in ycols if c != right_choice]) or "Y"
+            )
             ax.set_ylabel(
-                ", ".join([c for c in ycols if c != right_choice]) or "Y",
-                fontsize=LABEL_FONTSIZE,
+                self.y_left_label.get() or left_label_default, fontsize=LABEL_FONTSIZE
             )
             ax.set_title(self.title_text.get(), fontsize=SUBPLOT_TITLE_FONTSIZE)
             fig.suptitle(
@@ -1881,6 +2033,7 @@ class GeneralPlotter(tk.Tk):
             )
             for i, col in enumerate(ycols):
                 ax = axes[i]
+                ax.grid(self.show_grid.get())
                 st = self.series_style.get(col, {})
                 if st.get("visible", True) is not False:
                     y_plot = self._transform_series(data[col], col)
@@ -1898,8 +2051,14 @@ class GeneralPlotter(tk.Tk):
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
+                    ax2.set_ylabel(
+                        self.y_right_label.get().strip() or right_choice,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
+                    )
                 ax.set_title(col, fontsize=SUBPLOT_TITLE_FONTSIZE)
-                ax.set_ylabel(col, fontsize=LABEL_FONTSIZE)
+                ax.set_ylabel(self.y_left_label.get() or col, fontsize=LABEL_FONTSIZE)
                 apply_common(ax)
                 _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
                 self._apply_references(ax)
@@ -1948,6 +2107,7 @@ class GeneralPlotter(tk.Tk):
 
             for i, lvl in enumerate(levels):
                 ax = axes[i]
+                ax.grid(self.show_grid.get())
                 mask = cats == lvl
                 x_sub = pd.to_numeric(self.df.loc[mask, xcol], errors="coerce")
                 for col in ycols:
@@ -1966,10 +2126,26 @@ class GeneralPlotter(tk.Tk):
                     self._apply_limits(ax2, which="right", set_x=False)
                     self._apply_ticks(ax2, set_x=False)
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
+                    ax2.set_ylabel(
+                        self.y_right_label.get() or right_choice,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
+                    )
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
+                    ax2.set_ylabel(
+                        self.y_right_label.get().strip() or right_choice,
+                        fontsize=LABEL_FONTSIZE,
+                        rotation=-90,
+                        labelpad=12,
+                    )
                 ax.set_title(f"{facet_col} = {lvl}", fontsize=SUBPLOT_TITLE_FONTSIZE)
-                ax.set_ylabel(", ".join(ycols), fontsize=LABEL_FONTSIZE)
+                ax.set.ylabel(
+                    self.y_left_label.get() or (", ".join(ycols)),
+                    fontsize=LABEL_FONTSIZE,
+                )
+
                 apply_common(ax)
                 _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
                 self._apply_references(ax)
