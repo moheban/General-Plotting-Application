@@ -1,11 +1,3 @@
-# general_plotter.py
-# General-purpose plotting GUI for CSV/Excel data (Tkinter + Matplotlib + pandas)
-# - Clear plot types (Single, Single + Right Y, Subplot Grid, Subplot Grid + Right Y, Facet Grid, Facet Grid + Right Y)
-# - Consolidated Plot tab with labeled sections
-# - Contextual controls (right-axis & facet appear only when relevant)
-# - Live preview (debounced), export PNG/SVG/PDF/PPTX, presets, settings persistence
-# - LEFT COLUMN is now resizable via a Panedwindow sash; canvas width tracks pane width
-
 import os, json, sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
