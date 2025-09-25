@@ -274,6 +274,19 @@ class GeneralPlotter(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _collect_legend_entries(self, fig):
+        """Collect unique legend handles/labels from ALL axes in a figure (including twinx)."""
+        handles, labels, seen = [], [], set()
+        for ax in fig.axes:
+            h, l = ax.get_legend_handles_labels()
+            for hi, li in zip(h, l):
+                if not li or li in seen:
+                    continue
+                handles.append(hi)
+                labels.append(li)
+                seen.add(li)
+        return handles, labels
+
     # ---------- Back-compat ----------
     @staticmethod
     def _map_old_mode(old_mode: str | None) -> str | None:
@@ -798,6 +811,7 @@ class GeneralPlotter(tk.Tk):
                 "lower center",
                 "upper center",
                 "center",
+                "outside bottom",
             ],
             textvariable=self.legend_loc,
             state="readonly",
@@ -956,6 +970,11 @@ class GeneralPlotter(tk.Tk):
         self.e_yrmax = ttk.Entry(lf_ranges, textvariable=self.y_right_max, width=10)
         self.e_yrmax.grid(row=2, column=4, sticky="w", padx=6, pady=4)
 
+        # Keep the manual range boxes in sync with the Auto toggles
+        self.auto_x.trace_add("write", lambda *_: self._sync_range_states())
+        self.auto_y_left.trace_add("write", lambda *_: self._sync_range_states())
+        self.auto_y_right.trace_add("write", lambda *_: self._sync_range_states())
+
         lf_ticks = ttk.Labelframe(left, text="Ticks")
         lf_ticks.pack(fill="x", padx=6, pady=(4, 8))
         ttk.Checkbutton(
@@ -1113,9 +1132,12 @@ class GeneralPlotter(tk.Tk):
         if isinstance(widget, ttk.Spinbox):
             widget.bind("<FocusOut>", callback)
             widget.bind("<Return>", callback)
-        if isinstance(widget, ttk.Checkbutton) or isinstance(widget, ttk.Radiobutton):
+        # ↓ Replace your existing check/radio block with this:
+        if isinstance(widget, (ttk.Checkbutton, ttk.Radiobutton)):
             try:
-                widget.configure(command=callback)
+                # Only set a command if one is not already present
+                if not widget.cget("command"):
+                    widget.configure(command=callback)
             except Exception:
                 pass
         for child in widget.winfo_children():
@@ -1611,6 +1633,7 @@ class GeneralPlotter(tk.Tk):
         data = {col: pd.to_numeric(df[col], errors="coerce") for col in ycols}
         ptype = self.plot_type.get()
         legend_loc = self.legend_loc.get()
+        legend_outside = legend_loc == "outside bottom"
 
         if ptype in ("single", "single_right"):
             ax = self.preview_fig.add_subplot(111)
@@ -1694,9 +1717,6 @@ class GeneralPlotter(tk.Tk):
             self.preview_fig.suptitle(
                 self.suptitle_text.get(), fontsize=SUPTITLE_FONTSIZE, y=SUPTITLE_Y
             )
-            ax.legend(
-                loc=legend_loc, fontsize=LABEL_FONTSIZE - 1, ncol=min(3, len(ycols))
-            )
 
         elif ptype in ("grid", "grid_right"):
             n = len(ycols)
@@ -1763,16 +1783,119 @@ class GeneralPlotter(tk.Tk):
                 self._apply_limits(ax, which="left")
                 _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
                 self._apply_references(ax)
-                ax.legend(loc="best", fontsize=LABEL_FONTSIZE - 1)
+                if legend_loc != "outside bottom":
+                    ax.legend(loc="best", fontsize=LABEL_FONTSIZE - 1)
 
             for j in range(n, len(axs)):
                 axs[j].set_visible(False)
+            if legend_loc == "outside bottom":
+                # Gather unique handles/labels from all subplots (and any right twins)
+                handles, labels = [], []
+                twins = []
+                for i, col in enumerate(ycols):
+                    # collect from left axes
+                    h, l = axs[i].get_legend_handles_labels()
+                    handles += h
+                    labels += l
+                    # collect from right axes if created
+                    for child in axs[i].get_children():
+                        # no reliable handle, so instead track twins explicitly during creation
+                        pass
+                # If you created ax2 twins in the loop, append them to `twins` there; then:
+                for t in twins:
+                    try:
+                        h2, l2 = t.get_legend_handles_labels()
+                        handles += h2
+                        labels += l2
+                    except Exception:
+                        pass
+
+                seen, H, L = set(), [], []
+                for h, l in zip(handles, labels):
+                    if l and l not in seen:
+                        seen.add(l)
+                        H.append(h)
+                        L.append(l)
+
+                if H:
+                    self.preview_fig.legend(
+                        H,
+                        L,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 0.02),  # inside reserved bottom margin
+                        ncol=min(3, len(L)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
+                # Make room under subplots
+                self.preview_fig.subplots_adjust(bottom=0.22)
+            if legend_loc == "outside bottom":
+                # Gather unique handles/labels from all subplots (and any right twins)
+                handles, labels = [], []
+                twins = []
+                for i, col in enumerate(ycols):
+                    # collect from left axes
+                    h, l = axs[i].get_legend_handles_labels()
+                    handles += h
+                    labels += l
+                    # collect from right axes if created
+                    for child in axs[i].get_children():
+                        # no reliable handle, so instead track twins explicitly during creation
+                        pass
+                # If you created ax2 twins in the loop, append them to `twins` there; then:
+                for t in twins:
+                    try:
+                        h2, l2 = t.get_legend_handles_labels()
+                        handles += h2
+                        labels += l2
+                    except Exception:
+                        pass
+
+                seen, H, L = set(), [], []
+                for h, l in zip(handles, labels):
+                    if l and l not in seen:
+                        seen.add(l)
+                        H.append(h)
+                        L.append(l)
+
+                if H:
+                    self.preview_fig.legend(
+                        H,
+                        L,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 0.02),  # inside reserved bottom margin
+                        ncol=min(3, len(L)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
+                # Make room under subplots
+                self.preview_fig.subplots_adjust(bottom=0.22)
+
             self.preview_fig.tight_layout(rect=[0, 0, 1, 0.94])
             self.preview_fig.suptitle(
                 self.suptitle_text.get() or self.title_text.get(),
                 fontsize=SUPTITLE_FONTSIZE,
                 y=SUPTITLE_Y,
             )
+            if legend_loc == "outside bottom":
+                self.preview_fig.subplots_adjust(bottom=0.22)
+                handles, labels = self._collect_legend_entries(self.preview_fig)
+                if handles:
+                    self.preview_fig.legend(
+                        handles,
+                        labels,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 0.02),
+                        ncol=min(3, len(labels)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
 
             try:
                 txt = []
@@ -1872,7 +1995,8 @@ class GeneralPlotter(tk.Tk):
                     ax.set_yscale("log")
                 for lbl in ax.get_xticklabels():
                     lbl.set_rotation(self.x_tick_rotation.get())
-                ax.legend(loc="best", fontsize=LABEL_FONTSIZE - 1)
+                if legend_loc != "outside bottom":
+                    ax.legend(loc="best", fontsize=LABEL_FONTSIZE - 1)
 
             for j in range(n, len(axs)):
                 axs[j].set_visible(False)
@@ -1882,6 +2006,19 @@ class GeneralPlotter(tk.Tk):
                 fontsize=SUPTITLE_FONTSIZE,
                 y=SUPTITLE_Y,
             )
+            if legend_outside:
+                # Make room for the outside legend and place a single figure-level legend
+                self.preview_fig.subplots_adjust(bottom=0.20)
+                handles, labels = self._collect_legend_entries(self.preview_fig)
+                if handles:
+                    self.preview_fig.legend(
+                        handles,
+                        labels,
+                        loc="lower center",
+                        ncol=min(6, len(labels)),
+                        fontsize=LABEL_FONTSIZE - 1,
+                        frameon=False,
+                    )
 
         if mplcursors is not None:
             try:
@@ -1904,6 +2041,7 @@ class GeneralPlotter(tk.Tk):
             (self.e_yrmax, self.auto_y_right),
         ]:
             widget.configure(state="disabled" if flag.get() else "normal")
+        self._schedule_preview()
 
     # ---------- Full render/export ----------
     def render_plots(self):
@@ -1932,6 +2070,8 @@ class GeneralPlotter(tk.Tk):
         x = pd.to_numeric(df_full[xcol], errors="coerce")
         data = {col: pd.to_numeric(df_full[col], errors="coerce") for col in ycols}
         legend_loc = self.legend_loc.get()
+        legend_outside = legend_loc == "outside bottom"
+
         figs = []
 
         def apply_common(ax):
@@ -1945,11 +2085,12 @@ class GeneralPlotter(tk.Tk):
                 ax.set_yscale("log")
             for lbl in ax.get_xticklabels():
                 lbl.set_rotation(self.x_tick_rotation.get())
-            ax.legend(
-                loc=legend_loc if ptype.startswith("single") else "best",
-                fontsize=LABEL_FONTSIZE,
-                ncol=min(3, len(ycols)),
-            )
+            if legend_loc != "outside bottom":
+                ax.legend(
+                    loc=legend_loc if ptype.startswith("single") else "best",
+                    fontsize=LABEL_FONTSIZE,
+                    ncol=min(3, len(ycols)),
+                )
 
         if ptype in ("single", "single_right"):
             fig, ax = plt.subplots(figsize=(11, 8.5))
@@ -2004,9 +2145,41 @@ class GeneralPlotter(tk.Tk):
             fig.suptitle(
                 self.suptitle_text.get(), fontsize=SUPTITLE_FONTSIZE, y=SUPTITLE_Y
             )
+            self._apply_references(ax)
             apply_common(ax)
             _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
-            self._apply_references(ax)
+
+            if legend_loc == "outside bottom":
+                handles, labels = ax.get_legend_handles_labels()
+                try:
+                    if "ax2" in locals() and ax2 is not None:
+                        h2, l2 = ax2.get_legend_handles_labels()
+                        handles += h2
+                        labels += l2
+                except Exception:
+                    pass
+
+                seen, H, L = set(), [], []
+                for h, l in zip(handles, labels):
+                    if l and l not in seen:
+                        seen.add(l)
+                        H.append(h)
+                        L.append(l)
+
+                if H:
+                    ax.legend(
+                        H,
+                        L,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, -0.26),
+                        ncol=min(3, len(L)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
+                fig.subplots_adjust(bottom=0.28)
+
             figs.append(fig)
 
         elif ptype in ("grid", "grid_right"):
@@ -2023,6 +2196,7 @@ class GeneralPlotter(tk.Tk):
             right_choice = (
                 self.right_axis_series.get() if ptype.endswith("right") else None
             )
+            right_twins = []
             for i, col in enumerate(ycols):
                 ax = axes[i]
                 ax.grid(self.show_grid.get())
@@ -2032,6 +2206,7 @@ class GeneralPlotter(tk.Tk):
                     self._plot_series(ax, x, y_plot, col)
                 if right_choice and right_choice in self.df.columns:
                     ax2 = ax.twinx()
+                    right_twins.append(ax2)
                     self._plot_series(
                         ax2,
                         x,
@@ -2049,13 +2224,52 @@ class GeneralPlotter(tk.Tk):
                         rotation=-90,
                         labelpad=12,
                     )
-                ax.set_title(col, fontsize=SUBPLOT_TITLE_FONTSIZE)
-                ax.set_ylabel(self.y_left_label.get() or col, fontsize=LABEL_FONTSIZE)
-                apply_common(ax)
-                _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
-                self._apply_references(ax)
+            ax.set_title(col, fontsize=SUBPLOT_TITLE_FONTSIZE)
+            ax.set_ylabel(self.y_left_label.get() or col, fontsize=LABEL_FONTSIZE)
+            self._apply_references(ax)
+            apply_common(ax)
+            _apply_formatter_to_axis(ax.yaxis, self.y_left_format.get())
+
             for j in range(len(ycols), len(axes)):
                 axes[j].set_visible(False)
+            if legend_loc == "outside bottom":
+                handles, labels = [], []
+                # collect from each subplot
+                for ax_i in axes:
+                    h, l = ax_i.get_legend_handles_labels()
+                    handles += h
+                    labels += l
+                # collect from right-side twins if any
+                for t in right_twins:
+                    try:
+                        h2, l2 = t.get_legend_handles_labels()
+                        handles += h2
+                        labels += l2
+                    except Exception:
+                        pass
+
+                # de-duplicate while preserving order
+                seen, H, L = set(), [], []
+                for h, l in zip(handles, labels):
+                    if l and l not in seen:
+                        seen.add(l)
+                        H.append(h)
+                        L.append(l)
+
+                if H:
+                    fig.legend(
+                        H,
+                        L,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 0.02),
+                        ncol=min(3, len(L)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
+                fig.subplots_adjust(bottom=0.22)
+
             fig.suptitle(
                 self.suptitle_text.get() or self.title_text.get(),
                 fontsize=SUPTITLE_FONTSIZE,
@@ -2096,6 +2310,7 @@ class GeneralPlotter(tk.Tk):
             right_choice = (
                 self.right_axis_series.get() if ptype.endswith("right") else None
             )
+            right_twins = []
 
             for i, lvl in enumerate(levels):
                 ax = axes[i]
@@ -2111,6 +2326,7 @@ class GeneralPlotter(tk.Tk):
                         )
                 if right_choice and right_choice in self.df.columns:
                     ax2 = ax.twinx()
+                    right_twins.append(ax2)
                     y_r = pd.to_numeric(
                         self.df.loc[mask, right_choice], errors="coerce"
                     )
@@ -2143,6 +2359,41 @@ class GeneralPlotter(tk.Tk):
                 self._apply_references(ax)
             for j in range(n, len(axes)):
                 axes[j].set_visible(False)
+            if legend_loc == "outside bottom":
+                handles, labels = [], []
+                for ax_i in axes:
+                    h, l = ax_i.get_legend_handles_labels()
+                    handles += h
+                    labels += l
+                for t in right_twins:
+                    try:
+                        h2, l2 = t.get_legend_handles_labels()
+                        handles += h2
+                        labels += l2
+                    except Exception:
+                        pass
+
+                seen, H, L = set(), [], []
+                for h, l in zip(handles, labels):
+                    if l and l not in seen:
+                        seen.add(l)
+                        H.append(h)
+                        L.append(l)
+
+                if H:
+                    fig.legend(
+                        H,
+                        L,
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, 0.02),
+                        ncol=min(3, len(L)),
+                        frameon=True,
+                        fancybox=True,
+                        shadow=True,
+                        borderaxespad=0.0,
+                    )
+                fig.subplots_adjust(bottom=0.22)
+
             fig.suptitle(
                 self.suptitle_text.get() or self.title_text.get(),
                 fontsize=SUPTITLE_FONTSIZE,
