@@ -69,6 +69,8 @@ LEFT_COL_INIT = 520  # initial width of the left pane (drag the sash to resize)
 LEFT_COL_MIN = 360  # don't let it shrink below this (keeps controls readable)
 SCROLLBAR_FALLBACK_WIDTH = 18  # used only before the real width is known
 
+EXPORT_DPI = 600
+
 
 def _safe_float(v, default=None):
     try:
@@ -97,6 +99,38 @@ def _percent_fmt(v, _):
         return f"{100*float(v):.0f}%"
     except Exception:
         return ""
+
+
+def _make_legend_draggable(legend):
+    if legend is None:
+        return
+    try:
+        legend.set_draggable(True)
+    except Exception:
+        pass
+
+
+def _make_legends_draggable(fig):
+    if fig is None:
+        return
+    seen = set()
+    for legend in getattr(fig, "legends", []):
+        if legend is None:
+            continue
+        _make_legend_draggable(legend)
+        seen.add(id(legend))
+    for ax in getattr(fig, "axes", []):
+        legend = ax.get_legend()
+        if legend is None or id(legend) in seen:
+            continue
+        _make_legend_draggable(legend)
+
+
+def _resolve_right_label(custom, fallback):
+    custom = (custom or "").strip()
+    if custom:
+        return custom
+    return fallback or ""
 
 
 def _apply_theme(theme_key: str):
@@ -188,6 +222,9 @@ class GeneralPlotter(tk.Tk):
         self.sheet_names: list[str] = []
         self.current_sheet = tk.StringVar()
         self.columns: list[str] = []
+        self.nb: ttk.Notebook | None = None
+        self.render_tab_counter = 0
+        self.render_tabs: list[dict] = []
 
         # Persistent settings
         self.settings = self._load_settings()
@@ -398,6 +435,7 @@ class GeneralPlotter(tk.Tk):
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=10, pady=10)
+        self.nb = nb
 
         self.tab_data = ttk.Frame(nb)
         self.tab_plot = ttk.Frame(nb)
@@ -412,7 +450,7 @@ class GeneralPlotter(tk.Tk):
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(
-            bottom, text="Render Plot(s) to New Window", command=self.render_plots
+            bottom, text="Render Plot in New Tab", command=self.render_plots
         ).pack(side="left")
         ttk.Button(bottom, text="Export PNG/SVG/PDF", command=self.export_plots).pack(
             side="left", padx=8
@@ -420,9 +458,9 @@ class GeneralPlotter(tk.Tk):
         ttk.Button(bottom, text="Save Settings", command=self._save_settings).pack(
             side="left", padx=8
         )
-        ttk.Button(
-            bottom, text="Close All Figures", command=lambda: plt.close("all")
-        ).pack(side="left", padx=8)
+        ttk.Button(bottom, text="Close All Figures", command=self._close_all_figures).pack(
+            side="left", padx=8
+        )
         ttk.Button(bottom, text="Save Preset", command=self._save_preset).pack(
             side="left", padx=8
         )
@@ -436,6 +474,113 @@ class GeneralPlotter(tk.Tk):
                 [plt.figure(n) for n in plt.get_fignums()]
             ),
         ).pack(side="left", padx=8)
+
+    def _display_rendered_figures(self, figs: list[plt.Figure]):
+        if not figs:
+            return
+        if self.nb is None:
+            try:
+                plt.show(block=False)
+            except Exception:
+                pass
+            return
+
+        self.render_tab_counter += 1
+        tab_title = f"Render {self.render_tab_counter}"
+        tab = ttk.Frame(self.nb)
+        tab_info = {"tab": tab, "canvases": [], "toolbars": [], "figures": figs}
+
+        header = ttk.Frame(tab)
+        header.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(
+            header,
+            text=f"{len(figs)} figure(s) rendered",
+            font=("Times New Roman", 12, "bold"),
+        ).pack(side="left")
+        ttk.Button(
+            header,
+            text="Close Tab",
+            command=lambda info=tab_info: self._close_render_tab(info),
+        ).pack(side="right")
+
+        if len(figs) == 1:
+            container = ttk.Frame(tab)
+            container.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            canvas = FigureCanvasTkAgg(figs[0], master=container)
+            widget = canvas.get_tk_widget()
+            widget.pack(fill="both", expand=True)
+            toolbar = NavigationToolbar2Tk(canvas, container)
+            toolbar.update()
+            toolbar.pack(fill="x", pady=(4, 0))
+            canvas.draw_idle()
+            tab_info["canvases"].append(canvas)
+            tab_info["toolbars"].append(toolbar)
+        else:
+            fig_nb = ttk.Notebook(tab)
+            fig_nb.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            tab_info["notebook"] = fig_nb
+            for idx, fig in enumerate(figs, start=1):
+                fig_frame = ttk.Frame(fig_nb)
+                fig_nb.add(fig_frame, text=f"Figure {idx}")
+                canvas = FigureCanvasTkAgg(fig, master=fig_frame)
+                widget = canvas.get_tk_widget()
+                widget.pack(fill="both", expand=True)
+                toolbar = NavigationToolbar2Tk(canvas, fig_frame)
+                toolbar.update()
+                toolbar.pack(fill="x", pady=(4, 0))
+                canvas.draw_idle()
+                tab_info["canvases"].append(canvas)
+                tab_info["toolbars"].append(toolbar)
+
+        self.nb.add(tab, text=tab_title)
+        self.nb.select(tab)
+        self.render_tabs.append(tab_info)
+
+    def _close_render_tab(self, tab_info: dict):
+        if tab_info not in self.render_tabs:
+            return
+        canvases = tab_info.get("canvases", [])
+        for canvas in canvases:
+            try:
+                fig = canvas.figure
+            except Exception:
+                fig = None
+            try:
+                widget = canvas.get_tk_widget()
+                widget.destroy()
+            except Exception:
+                pass
+            try:
+                canvas._tkcanvas.destroy()
+            except Exception:
+                pass
+            if fig is not None:
+                try:
+                    plt.close(fig)
+                except Exception:
+                    pass
+        for toolbar in tab_info.get("toolbars", []):
+            try:
+                toolbar.destroy()
+            except Exception:
+                pass
+        try:
+            self.nb.forget(tab_info["tab"])
+        except Exception:
+            pass
+        try:
+            tab_info["tab"].destroy()
+        except Exception:
+            pass
+        self.render_tabs.remove(tab_info)
+
+    def _close_all_figures(self):
+        for tab_info in list(self.render_tabs):
+            self._close_render_tab(tab_info)
+        try:
+            plt.close("all")
+        except Exception:
+            pass
 
     def _build_tab_data(self):
         f = self.tab_data
@@ -1335,7 +1480,7 @@ class GeneralPlotter(tk.Tk):
         blank = prs.slide_layouts[6]
         for idx, fig in enumerate(figs, start=1):
             tmp = os.path.join(os.getcwd(), f"_tmp_{idx}.png")
-            fig.savefig(tmp, dpi=220, bbox_inches="tight")
+            fig.savefig(tmp, dpi=EXPORT_DPI, bbox_inches="tight")
             slide = prs.slides.add_slide(blank)
             left, top = Inches(0.5), Inches(0.5)
             slide.shapes.add_picture(tmp, left, top, width=Inches(12.5))
@@ -1634,6 +1779,9 @@ class GeneralPlotter(tk.Tk):
         ptype = self.plot_type.get()
         legend_loc = self.legend_loc.get()
         legend_outside = legend_loc == "outside bottom"
+        right_series = (
+            self.right_axis_series.get() if ptype.endswith("right") else None
+        )
 
         if ptype in ("single", "single_right"):
             ax = self.preview_fig.add_subplot(111)
@@ -1663,18 +1811,22 @@ class GeneralPlotter(tk.Tk):
                     pass
 
             if ptype.endswith("right"):
-                r = self.right_axis_series.get()
-                if r and r != "None" and r in df.columns:
+                if right_series and right_series != "None" and right_series in df.columns:
                     ax2 = ax.twinx()
                     ax2.grid(False)
-                    self._plot_series(ax2, x, pd.to_numeric(df[r], errors="coerce"), r)
+                    self._plot_series(
+                        ax2,
+                        x,
+                        pd.to_numeric(df[right_series], errors="coerce"),
+                        right_series,
+                    )
                     self._apply_limits(ax2, which="right", set_x=False)
                     self._apply_ticks(ax2, set_x=False)
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        self.y_right_label.get() or right_series,
+                        _resolve_right_label(self.y_right_label.get(), right_series),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=12,
@@ -1691,10 +1843,7 @@ class GeneralPlotter(tk.Tk):
 
             # Labels (use custom if provided)
             ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
-            left_label_default = (
-                ", ".join([c for c in ycols if c != self.right_axis_series.get()])
-                or "Y"
-            )
+            left_label_default = ", ".join([c for c in ycols if c != right_series]) or "Y"
             ax.set_ylabel(
                 self.y_left_label.get() or left_label_default, fontsize=LABEL_FONTSIZE
             )
@@ -1769,7 +1918,7 @@ class GeneralPlotter(tk.Tk):
                         ax2.set_yscale("log")
                     # Right axis label
                     ax2.set_ylabel(
-                        self.y_right_label.get() or r,
+                        _resolve_right_label(self.y_right_label.get(), right_series),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=12,
@@ -1777,7 +1926,6 @@ class GeneralPlotter(tk.Tk):
 
                 ax.set_title(col, fontsize=SUBPLOT_TITLE_FONTSIZE)
                 ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
-                left_label = self.y_left_label.get().strip() or col
                 ax.set_ylabel(self.y_left_label.get() or col, fontsize=LABEL_FONTSIZE)
                 self._apply_ticks(ax)
                 self._apply_limits(ax, which="left")
@@ -1971,7 +2119,7 @@ class GeneralPlotter(tk.Tk):
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        self.y_right_label.get() or right_series,
+                        _resolve_right_label(self.y_right_label.get(), right_series),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=12,
@@ -1979,7 +2127,6 @@ class GeneralPlotter(tk.Tk):
 
                 ax.set_title(f"{facet_col} = {lvl}", fontsize=SUBPLOT_TITLE_FONTSIZE)
                 ax.set_xlabel(self.x_label.get() or xcol, fontsize=LABEL_FONTSIZE)
-                left_label = self.y_left_label.get().strip() or ", ".join(ycols)
                 ax.set_ylabel(
                     self.y_left_label.get() or (", ".join(ycols)),
                     fontsize=LABEL_FONTSIZE,
@@ -2124,7 +2271,7 @@ class GeneralPlotter(tk.Tk):
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        self.y_right_label.get() or right_choice,
+                        _resolve_right_label(self.y_right_label.get(), right_choice),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=15,
@@ -2180,6 +2327,8 @@ class GeneralPlotter(tk.Tk):
                     )
                 fig.subplots_adjust(bottom=0.28)
 
+            _make_legends_draggable(fig)
+
             figs.append(fig)
 
         elif ptype in ("grid", "grid_right"):
@@ -2219,7 +2368,7 @@ class GeneralPlotter(tk.Tk):
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        self.y_right_label.get().strip() or right_choice,
+                        _resolve_right_label(self.y_right_label.get(), right_choice),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=12,
@@ -2269,6 +2418,8 @@ class GeneralPlotter(tk.Tk):
                         borderaxespad=0.0,
                     )
                 fig.subplots_adjust(bottom=0.22)
+
+            _make_legends_draggable(fig)
 
             fig.suptitle(
                 self.suptitle_text.get() or self.title_text.get(),
@@ -2334,16 +2485,10 @@ class GeneralPlotter(tk.Tk):
                     self._apply_limits(ax2, which="right", set_x=False)
                     self._apply_ticks(ax2, set_x=False)
                     _apply_formatter_to_axis(ax2.yaxis, self.y_right_format.get())
-                    ax2.set_ylabel(
-                        self.y_right_label.get() or right_choice,
-                        fontsize=LABEL_FONTSIZE,
-                        rotation=-90,
-                        labelpad=12,
-                    )
                     if self.log_y_right.get():
                         ax2.set_yscale("log")
                     ax2.set_ylabel(
-                        self.y_right_label.get().strip() or right_choice,
+                        _resolve_right_label(self.y_right_label.get(), right_choice),
                         fontsize=LABEL_FONTSIZE,
                         rotation=-90,
                         labelpad=12,
@@ -2394,6 +2539,8 @@ class GeneralPlotter(tk.Tk):
                     )
                 fig.subplots_adjust(bottom=0.22)
 
+            _make_legends_draggable(fig)
+
             fig.suptitle(
                 self.suptitle_text.get() or self.title_text.get(),
                 fontsize=SUPTITLE_FONTSIZE,
@@ -2401,12 +2548,8 @@ class GeneralPlotter(tk.Tk):
             )
             figs.append(fig)
 
-        for fig in figs:
-            try:
-                fig.canvas.manager.set_window_title("General Plotter – Figure")
-            except Exception:
-                pass
-        plt.show(block=False)
+        if figs:
+            self._display_rendered_figures(figs)
         self._save_settings()
 
     def export_plots(self):
@@ -2428,9 +2571,9 @@ class GeneralPlotter(tk.Tk):
             svg = os.path.join(outdir, f"{base}_{i:02d}.svg")
             pdf = os.path.join(outdir, f"{base}_{i:02d}.pdf")
             try:
-                fig.savefig(png, dpi=300, bbox_inches="tight")
+                fig.savefig(png, dpi=EXPORT_DPI, bbox_inches="tight")
                 fig.savefig(svg, bbox_inches="tight")
-                fig.savefig(pdf, bbox_inches="tight")
+                fig.savefig(pdf, dpi=EXPORT_DPI, bbox_inches="tight")
             except Exception as e:
                 messagebox.showerror("Export error", f"Could not save figure {i}: {e}")
                 return
