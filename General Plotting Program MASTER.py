@@ -225,6 +225,8 @@ class GeneralPlotter(tk.Tk):
         self.nb: ttk.Notebook | None = None
         self.render_tab_counter = 0
         self.render_tabs: list[dict] = []
+        self._sheet_indicator_canvas: tk.Canvas | None = None
+        self._sheet_indicator_state = False
 
         # Persistent settings
         self.settings = self._load_settings()
@@ -612,12 +614,45 @@ class GeneralPlotter(tk.Tk):
             state="readonly",
         )
         self.cb_sheet.grid(row=1, column=1, sticky="ew", padx=6, pady=6)
-        ttk.Button(f, text="Load Sheet", command=self._load_sheet).grid(
-            row=1, column=2, sticky="w", padx=6, pady=6
+        self.cb_sheet.bind("<<ComboboxSelected>>", self._on_sheet_selection_change)
+
+        load_sheet_frame = ttk.Frame(f)
+        load_sheet_frame.grid(row=1, column=2, sticky="w", padx=6, pady=6)
+
+        ttk.Button(
+            load_sheet_frame,
+            text="Load Sheet",
+            command=self._load_sheet,
+        ).pack(side="left")
+
+        self._sheet_indicator_canvas = self._create_sheet_status_indicator(
+            load_sheet_frame
         )
 
         self.lbl_status = ttk.Label(f, text="No data loaded.")
         self.lbl_status.grid(row=2, column=0, columnspan=4, sticky="w", padx=6, pady=10)
+
+    def _create_sheet_status_indicator(self, parent):
+        canvas = tk.Canvas(parent, width=14, height=14, highlightthickness=0, borderwidth=0)
+        canvas.pack(side="left", padx=(6, 0))
+        self._sheet_indicator_canvas = canvas
+        self._update_sheet_indicator(self._sheet_indicator_state)
+        return canvas
+
+    def _update_sheet_indicator(self, loaded: bool) -> None:
+        self._sheet_indicator_state = bool(loaded)
+        canvas = self._sheet_indicator_canvas
+        if canvas is None or not canvas.winfo_exists():
+            return
+        canvas.delete("all")
+        radius = 4
+        fill_color = "#2da44e" if loaded else "#d73a49"
+        canvas.create_oval(
+            2, 2, 2 + radius * 2, 2 + radius * 2, fill=fill_color, outline=""
+        )
+
+    def _on_sheet_selection_change(self, *_):
+        self._update_sheet_indicator(False)
 
     def _build_tab_plot(self):
         f = self.tab_plot
@@ -1518,12 +1553,14 @@ class GeneralPlotter(tk.Tk):
         self.e_path.delete(0, tk.END)
         self.e_path.insert(0, path)
         self.sheet_names = []
+        self._update_sheet_indicator(False)
         if path.lower().endswith((".xlsx", ".xls")):
             try:
                 xls = pd.ExcelFile(path, engine="openpyxl")
                 self.sheet_names = xls.sheet_names
             except Exception as e:
                 messagebox.showerror("Excel error", f"Could not read workbook: {e}")
+                self._update_sheet_indicator(False)
                 return
             self.cb_sheet.configure(values=self.sheet_names)
             last_sheet = self.settings.get("last_sheet_name", "")
@@ -1537,6 +1574,7 @@ class GeneralPlotter(tk.Tk):
                 self.df = pd.read_csv(path)
             except Exception as e:
                 messagebox.showerror("CSV error", f"Could not read CSV: {e}")
+                self._update_sheet_indicator(False)
                 return
             self._post_load_dataframe()
 
@@ -1548,12 +1586,14 @@ class GeneralPlotter(tk.Tk):
         if not self.file_path or not self.current_sheet.get():
             messagebox.showerror("Missing info", "Pick a file and a sheet.")
             return
+        self._update_sheet_indicator(False)
         try:
             self.df = pd.read_excel(
                 self.file_path, sheet_name=self.current_sheet.get(), engine="openpyxl"
             )
         except Exception as e:
             messagebox.showerror("Load error", f"Could not load sheet: {e}")
+            self._update_sheet_indicator(False)
             return
         self._post_load_dataframe()
         self._schedule_preview()
@@ -1591,6 +1631,7 @@ class GeneralPlotter(tk.Tk):
             )
             + f" | Rows: {len(self.df)} | Cols: {len(self.columns)}"
         )
+        self._update_sheet_indicator(True)
 
     def _get_selected_y(self):
         return [self.lb_y.get(i) for i in self.lb_y.curselection()]
